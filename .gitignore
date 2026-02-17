@@ -1,1 +1,30 @@
-.venv
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments (The big one!)
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables / Secrets (NEVER check these in)
+.env
+.env.local
+.env.*
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Build and Distribution
+dist/
+build/
+*.egg-info/
