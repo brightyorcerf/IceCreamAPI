@@ -1,99 +1,134 @@
-from fastapi import FastAPI, HTTPException
-from typing import List, Dict, Any
-from datetime import datetime
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from typing import List, Dict, Any, Annotated, TypeVar, Generic, Optional
+from datetime import datetime, timezone
 from random import randint
+from sqlmodel import SQLModel, create_engine, Field, Session, select
+from contextlib import asynccontextmanager
 
-app = FastAPI(root_path="/api/v1")
 
-inventory: List[Dict[str, Any]] = [
-    {
-        "scoopID": "1",
-        "flavor": "Triple Fudge Brownie",
-        "churnedAt": datetime.now(),
-        "bestBefore": datetime.now()
-    }, 
-    {
-        "scoopID": "2",
-        "flavor": "Midnight Mint Chip",
-        "churnedAt": datetime.now(),
-        "bestBefore": datetime.now()
-    }
-]
+# ── Models ────────────────────────────────────────────────────────────────────
+
+class Flavor(SQLModel, table=True):
+    scoopID:    int | None = Field(default=None, primary_key=True)
+    flavor:     str        = Field(index=True)
+    churnedAt:  datetime | None = Field(default=None, index=True)
+    bestBefore: datetime | None = Field(
+        default_factory=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
+class FlavorCreate(SQLModel):
+    flavor:    str
+    churnedAt: datetime | None = None
+
+
+class FlavorUpdate(SQLModel):
+    flavor:    str | None = None
+    churnedAt: datetime | None = None
+
+
+# ── Generic response wrapper ───────────────────────────────────────────────────
+
+T = TypeVar("T")
+
+class Response(BaseModel, Generic[T]):
+    data: T
+
+
+# ── DB setup ──────────────────────────────────────────────────────────────────
+
+sqlite_url  = "sqlite:///database.db"
+engine      = create_engine(sqlite_url, connect_args={"check_same_thread": False})
+
+
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+
+
+SessionDep = Annotated[Session, Depends(get_session)]
+
+
+# ── Startup ───────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_db_and_tables()
+    with Session(engine) as session:
+        if not session.exec(select(Flavor)).first():
+            session.add_all([
+                Flavor(flavor="Triple Fudge Brownie"),
+                Flavor(flavor="Midnight Mint Chip"),
+            ])
+            session.commit()
+    yield
+
+
+app = FastAPI(root_path="/api/v1", lifespan=lifespan)
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def welcome():
     return {"message": "Welcome to the Ice Cream API!"}
 
-#When a request comes in, FastAPI looks at URL path first
 
-#If the customer asks for /flavors, FastAPI looks for the function tied to @app.get("/flavors").
-#The @app.get("/url") is a "Decorator 
-
-@app.get("/flavors")
-async def readFlavors(): 
-    return {"menu": inventory}
-
-@app.get("/flavors/{id}")
-async def readFlavor(id: str): 
-    for item in inventory:
-        if item.get("scoopID") == id:
-            return item
-
-    raise HTTPException(status_code=404, detail="Flavor not found in the freezer!")\
-
-@app.post("/flavors")
-async def createFlavor(body: dict[str, Any]):
-
-    new : Any = {
-        "scoopID": randint(100, 1000),
-        "flavor": body.get("flavor"),
-        "churnedAt": body.get("churnedAt"),
-        "bestBefore": datetime.now()
-    } 
-
-    inventory.append(new)
-    return {"flavor": new}
-
-@app.put("/flavors/{id}")
-async def updateFlavor(id, body: dict[str, Any]):
-
-    for index, flavor in enumerate(inventory):
-        #enumerate turn list of items to a list of numbered items
-        #use any word but first parameter is what you call the idx and second is the data
-        if flavor.get("scoopID") == id:
-            
-            updated : Any = {
-                "scoopID": flavor.get("scoopID"),
-                "flavor": body.get("flavor"),
-                "churnedAt": flavor.get("churnedAt"),
-                "bestBefore": datetime.now()
-            }
-            inventory[index] = updated
-            return {"flavor": updated}
-    raise HTTPException(status_code=404, detail="this ID is not found")\
-
-@app.delete("/flavors/{id}")
-async def deleteFlavor(id, body: dict[str, Any]):
-
-    for index, flavor in enumerate(inventory): 
-        if flavor.get("scoopID") == id:
-            
-            inventory.pop(index) 
-            return Response(status_code=202)
-    raise HTTPException(status_code=404, detail="this ID is not found")\
+@app.get("/flavors", response_model=Response[list[Flavor]])
+async def read_flavors(session: SessionDep):
+    flavors = session.exec(select(Flavor)).all()
+    return Response(data=flavors)
 
 
-# fastapi dev main.py to run 
+@app.get("/flavors/{id}", response_model=Response[Flavor])
+async def read_flavor(id: int, session: SessionDep):
+    flavor = session.get(Flavor, id)
+    if not flavor:
+        raise HTTPException(status_code=404, detail="Flavor not found in the freezer!")
+    return Response(data=flavor)
 
-# In Node.js, we wrote something like app.get('/flavors', (req, res) => { ... })
-# FastAPI uses decorators (@app.get) to do the exact same thing: maps URL path to specific function
 
-"""
-we created a RESTful API that supports:
+@app.post("/flavors", response_model=Response[Flavor], status_code=201)
+async def create_flavor(body: FlavorCreate, session: SessionDep):
+    new_flavor = Flavor(
+        flavor=body.flavor,
+        churnedAt=body.churnedAt,
+        bestBefore=datetime.now(timezone.utc),
+    )
+    session.add(new_flavor)
+    session.commit()
+    session.refresh(new_flavor)
+    return Response(data=new_flavor)
 
-routing: directing traffic to different functions based on URL
-serialization: converting Python data (lists/dicts) into JSON
-path parameters: Using {id} to let users filter data dynamically through URL.
-error handling: status codes
-"""
 
+@app.put("/flavors/{id}", response_model=Response[Flavor])
+async def update_flavor(id: int, body: FlavorUpdate, session: SessionDep):
+    flavor = session.get(Flavor, id)
+    if not flavor:
+        raise HTTPException(status_code=404, detail="Flavor not found in the freezer!")
+    if body.flavor is not None:
+        flavor.flavor = body.flavor
+    if body.churnedAt is not None:
+        flavor.churnedAt = body.churnedAt
+    flavor.bestBefore = datetime.now(timezone.utc)
+    session.add(flavor)
+    session.commit()
+    session.refresh(flavor)
+    return Response(data=flavor)
+
+
+@app.delete("/flavors/{id}", status_code=204)
+async def delete_flavor(id: int, session: SessionDep):
+    flavor = session.get(Flavor, id)
+    if not flavor:
+        raise HTTPException(status_code=404, detail="Flavor not found in the freezer!")
+    session.delete(flavor)
+    session.commit()
+
+
+# Run with: fastapi dev main.py
