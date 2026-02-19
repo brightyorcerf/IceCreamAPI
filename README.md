@@ -18,7 +18,7 @@ FastAPI is the tool that listens for those questions and gives back answers, all
 A REST API built with FastAPI and SQLModel that manages an ice cream flavor inventory stored in a SQLite database.
 
 ### Stack
-- **FastAPI — the web framework (handles routes, validation, docs)
+- FastAPI — the web framework (handles routes, validation, docs)
 - SQLModel — combines SQLAlchemy (database) + Pydantic (validation) in one
 - SQLite — lightweight file-based database (`database.db`)
 - Uvicorn — the server that runs everything
@@ -84,7 +84,7 @@ async def read_flavors(session: SessionDep):
 
 Instead of opening a DB connection inside every route, we write it once in `get_session()` and FastAPI automatically "injects" it into any function that asks for `SessionDep`. Cleaner and reusable.
 
-### 5. Generics and TypeVar — the advanced part 
+### 4. Generics and TypeVar — the advanced part 
 
 ```python
 T = TypeVar("T")
